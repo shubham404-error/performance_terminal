@@ -255,6 +255,75 @@ def cohort_summary(df):
 
     return pd.DataFrame(rows).sort_values(["Cohort Date", "Signal Type"], ascending=[False, True])
 
+
+def build_whatsapp_update(detail: pd.DataFrame, cohort_date, signal_type: str) -> str:
+    """Build a copy-paste-ready WhatsApp performance update for one cohort."""
+    if detail.empty:
+        return "No tracked signals available for this cohort."
+
+    work = detail.copy()
+    work["_ret"] = pd.to_numeric(work.get("CurrentReturnPct"), errors="coerce")
+    work = work.sort_values("_ret", ascending=False, na_position="last")
+
+    tracked = work["_ret"].dropna()
+    total = len(work)
+    wins = int((tracked > 0).sum()) if not tracked.empty else 0
+    losses = int((tracked < 0).sum()) if not tracked.empty else 0
+    flat = int((tracked == 0).sum()) if not tracked.empty else 0
+    pending = int(work["_ret"].isna().sum())
+
+    avg_return = tracked.mean() if not tracked.empty else np.nan
+    win_rate = (wins / len(tracked) * 100) if not tracked.empty else np.nan
+
+    try:
+        cohort_label = pd.to_datetime(cohort_date).strftime("%d %b %Y")
+    except Exception:
+        cohort_label = str(cohort_date)
+
+    lines = [
+        f"📊 *{signal_type} Performance Update*",
+        f"📅 Cohort: {cohort_label}",
+        "",
+        f"🎯 Signals: {total}",
+        f"📈 Average Return: {avg_return:+.2f}%" if pd.notna(avg_return) else "📈 Average Return: Pending",
+        f"🟢 Win Rate: {win_rate:.1f}%" if pd.notna(win_rate) else "🟢 Win Rate: Pending",
+        f"🟢 Winners: {wins}  |  🔴 Losers: {losses}  |  ⚪ Flat: {flat}",
+    ]
+
+    if pending:
+        lines.append(f"⏳ Pending market data: {pending}")
+
+    lines.extend(["", "*Running Trades*"])
+
+    for row in work.itertuples(index=False):
+        symbol = str(getattr(row, "Symbol", "")).strip()
+        setup = str(getattr(row, "Setup", "")).strip()
+        ret = getattr(row, "_ret", np.nan)
+        days = pd.to_numeric(getattr(row, "TradingDaysElapsed", np.nan), errors="coerce")
+
+        if pd.notna(ret):
+            direction = "🟢" if ret > 0 else ("🔴" if ret < 0 else "⚪")
+            day_text = f" . {int(days)} trading days" if pd.notna(days) else ""
+            setup_text = f" | {setup}" if setup and setup.lower() != "nan" else ""
+            lines.append(f"{direction} *{symbol}*{setup_text}: {ret:+.2f}%{day_text}")
+        else:
+            lines.append(f"⏳ *{symbol}*: Pending")
+
+    if not tracked.empty:
+        best_row = work.loc[work["_ret"].idxmax()]
+        worst_row = work.loc[work["_ret"].idxmin()]
+        lines.extend([
+            "",
+            f"🏆 Best: *{best_row['Symbol']}* {best_row['_ret']:+.2f}%",
+            f"📉 Weakest: *{worst_row['Symbol']}* {worst_row['_ret']:+.2f}%",
+        ])
+
+    lines.extend([
+        "",
+        "_Research tracking only. Not investment advice._"
+    ])
+    return "\n".join(lines)
+
 # ---------------- UI ----------------
 
 st.title("Performance Terminal")
@@ -303,8 +372,8 @@ with st.sidebar:
         st.session_state["database"] = empty_database()
         st.rerun()
 
-tab_import, tab_dashboard, tab_detail, tab_export = st.tabs(
-    ["Import Cohort", "Dashboard", "Signal Detail", "Export"]
+tab_import, tab_dashboard, tab_detail, tab_whatsapp, tab_export = st.tabs(
+    ["Import Cohort", "Dashboard", "Signal Detail", "WhatsApp Update", "Export"]
 )
 
 with tab_import:
@@ -475,6 +544,62 @@ with tab_detail:
             x.metric("Current Basket Return", f"{valid.mean():+.2f}%")
             y.metric("Best", f"{best['Symbol']} {best['CurrentReturnPct']:+.2f}%")
             z.metric("Worst", f"{worst['Symbol']} {worst['CurrentReturnPct']:+.2f}%")
+
+
+with tab_whatsapp:
+    db = st.session_state["database"]
+
+    st.subheader("WhatsApp Community Update")
+    st.write(
+        "Select a cohort to generate a ready-to-copy performance update. "
+        "The box below is plain text so you can select all, copy, and paste it directly into WhatsApp."
+    )
+
+    if db.empty:
+        st.info("No tracked cohorts yet. Import a cohort and update its performance first.")
+    else:
+        wa_options = (
+            db[["CohortDate", "SignalType"]]
+            .drop_duplicates()
+            .sort_values(["CohortDate", "SignalType"], ascending=[False, True])
+            .reset_index(drop=True)
+        )
+        wa_labels = [
+            f"{row.CohortDate} . {row.SignalType}"
+            for row in wa_options.itertuples(index=False)
+        ]
+        wa_selected = st.selectbox(
+            "Choose cohort for WhatsApp update",
+            wa_labels,
+            key="whatsapp_cohort",
+        )
+        wa_row = wa_options.iloc[wa_labels.index(wa_selected)]
+
+        wa_detail = db.loc[
+            (db["CohortDate"] == wa_row["CohortDate"])
+            & (db["SignalType"] == wa_row["SignalType"])
+        ].copy()
+
+        message = build_whatsapp_update(
+            wa_detail,
+            wa_row["CohortDate"],
+            wa_row["SignalType"],
+        )
+
+        st.text_area(
+            "Copy this message and paste it into WhatsApp",
+            value=message,
+            height=min(max(320, 32 * (len(message.splitlines()) + 2)), 800),
+            key=f"whatsapp_message_{wa_selected}",
+        )
+
+        st.download_button(
+            "Download WhatsApp Message (.txt)",
+            data=message.encode("utf-8"),
+            file_name=f"whatsapp_{str(wa_row['SignalType']).lower().replace(' ', '_')}_{wa_row['CohortDate']}.txt",
+            mime="text/plain",
+            use_container_width=False,
+        )
 
 with tab_export:
     db = st.session_state["database"]
