@@ -1,1 +1,36 @@
 CohortDate,SignalType,Symbol,Company,YahooSymbol,Universe,Setup,Score,EntryPrice,ImportedAt,LastUpdated,CurrentPrice,TrailingProfitPct,Return1D,Return1W,Return1M,Return3M,Return6M,Return1Y,Status
+2026-08-25,Confluence,IFCI,IFCI Ltd.,IFCI.NS,Nifty Total Market,Trend Continuation,100.0,83.25,2026-08-25 13:49:37,2026-08-25 13:49:37,83.25,0.0,,,,,,,Active
+2026-08-25,Confluence,PAYTM,One 97 Communications Ltd.,PAYTM.NS,Nifty Total Market,Volume Breakout,95.0,1718.0,2026-08-25 13:49:37,2026-08-25 13:49:37,1718.0,0.0,,,,,,,Active
+2026-08-25,Confluence,ENTERO,Entero Healthcare Solutions Ltd.,ENTERO.NS,Nifty Total Market,Volume Breakout,95.0,1633.0,2026-08-25 13:49:37,2026-08-25 13:49:37,1633.0,0.0,,,,,,,Active
+2026-08-25,Confluence,PARADEEP,Paradeep Phosphates Ltd.,PARADEEP.NS,Nifty Total Market,Volume Breakout,95.0,159.6300048828125,2026-08-25 13:49:37,2026-08-25 13:49:37,159.6300048828125,0.0,,,,,,,Active
+2026-08-25,Confluence,INDIAGLYCO,India Glycols Ltd.,INDIAGLYCO.NS,Nifty Total Market,Fresh Momentum,95.0,1170.5,2026-08-25 13:49:37,2026-08-25 13:49:37,1170.5,0.0,,,,,,,Active
+2026-08-25,Confluence,DCBBANK,DCB Bank Ltd.,DCBBANK.NS,Nifty Total Market,Fresh Momentum,95.0,207.3699951171875,2026-08-25 13:49:37,2026-08-25 13:49:37,207.3699951171875,0.0,,,,,,,Active
+2026-08-25,Confluence,YATHARTH,Yatharth Hospital & Trauma Care Services Ltd.,YATHARTH.NS,Nifty Total Market,Volume Breakout,95.0,923.0499877929688,2026-08-25 13:49:37,2026-08-25 13:49:37,923.0499877929688,0.0,,,,,,,Active
+2026-08-25,Confluence,HFCL,HFCL Ltd.,HFCL.NS,Nifty Total Market,Trend Continuation,90.0,238.00999450683594,2026-08-25 13:49:37,2026-08-25 13:49:37,238.00999450683594,0.0,,,,,,,Active
+2026-08-25,Confluence,QPOWER,QUALITY POWER ELECTRICAL EQUIPMENTS Ltd.,QPOWER.NS,Nifty Total Market,Trend Continuation,90.0,1309.0999755859375,2026-08-25 13:49:37,2026-08-25 13:49:37,1309.0999755859375,0.0,,,,,,,Active
+2026-08-25,Confluence,VOLTAMP,Voltamp Transformers Ltd,VOLTAMP.NS,Nifty Total Market,Trend Continuation,90.0,10974.0,2026-08-25 13:49:37,2026-08-25 13:49:37,10974.0,0.0,,,,,,,Active
+2026-08-25,Confluence,KRBL,KRBL Ltd.,KRBL.NS,Nifty Total Market,Trend Continuation,90.0,423.0,2026-08-25 13:49:37,2026-08-25 13:49:37,423.0,0.0,,,,,,,Active
+2026-08-25,Confluence,LOTUSDEV,SRI LOTUS DEVELOPERS AND REALTY Ltd.,LOTUSDEV.NS,Nifty Total Market,Fresh Momentum,85.0,181.55999755859375,2026-08-25 13:49:37,2026-08-25 13:49:37,181.55999755859375,0.0,,,,,,,Active
+2026-08-25,Confluence,PFOCUS,Prime Focus Ltd.,PFOCUS.NS,Nifty Total Market,Fresh Momentum,85.0,302.75,2026-08-25 13:49:37,2026-08-25 13:49:37,302.75,0.0,,,,,,,Active
+2026-08-25,Confluence,AIIL,Authum Investment & Infrastructure Ltd.,AIIL.NS,Nifty Total Market,Fresh Momentum,85.0,566.6500244140625,2026-08-25 13:49:37,2026-08-25 13:49:37,566.6500244140625,0.0,,,,,,,Active
+2026-08-25,Confluence,ABCAPITAL,Aditya Birla Capital Ltd.,ABCAPITAL.NS,Nifty Total Market,Fresh Momentum,85.0,410.8500061035156,2026-08-25 13:49:37,2026-08-25 13:49:37,410.8500061035156,0.0,,,,,,,Active
+2026-08-25,Confluence,SHRIPISTON,SPR Auto Technologies Ltd.,SHRIPISTON.NS,Nifty Total Market,Trend Continuation,80.0,4629.89990234375,2026-08-25 13:49:37,2026-08-25 13:49:37,4629.89990234375,0.0,,,,,,,Active
+2026-08-25,Confluence,LAURUSLABS,Laurus Labs Ltd.,LAURUSLABS.NS,Nifty Total Market,Trend Continuation,80.0,1866.199951171875,2026-08-25 13:49:37,2026-08-25 13:49:37,1866.199951171875,0.0,,,,,,,Active
+2026-08-25,Confluence,BALAMINES,Balaji Amines Ltd.,BALAMINES.NS,Nifty Total Market,Fresh Momentum,80.0,2343.60009765625,2026-08-25 13:49:37,2026-08-25 13:49:37,2343.60009765625,0.0,,,,,,,Active
+2026-08-25,Confluence,WELENT,Welspun Enterprises Ltd.,WELENT.NS,Nifty Total Market,Fresh Momentum,80.0,661.0,2026-08-25 13:49:37,2026-08-25 13:49:37,661.0,0.0,,,,,,,Active
+2026-08-25,Confluence,PVRINOX,PVR INOX Ltd.,PVRINOX.NS,Nifty Total Market,Trend Continuation,80.0,1231.0,2026-08-25 13:49:37,2026-08-25 13:49:37,1231.0,0.0,,,,,,,Active
+2026-08-25,Confluence,AUBANK,AU Small Finance Bank Ltd.,AUBANK.NS,Nifty Total Market,Volume Breakout,80.0,1128.5999755859375,2026-08-25 13:49:37,2026-08-25 13:49:37,1128.5999755859375,0.0,,,,,,,Active
+2026-08-25,Confluence,CHALET,Chalet Hotels Ltd.,CHALET.NS,Nifty Total Market,Volume Breakout,80.0,894.0499877929688,2026-08-25 13:49:37,2026-08-25 13:49:37,894.0499877929688,0.0,,,,,,,Active
+2026-08-25,Confluence,DATAPATTNS,Data Patterns (India) Ltd.,DATAPATTNS.NS,Nifty Total Market,Trend Continuation,80.0,4542.2998046875,2026-08-25 13:49:37,2026-08-25 13:49:37,4542.2998046875,0.0,,,,,,,Active
+2026-08-25,Confluence,SAIL,Steel Authority of India Ltd.,SAIL.NS,Nifty Total Market,Volume Breakout,80.0,184.58999633789062,2026-08-25 13:49:37,2026-08-25 13:49:37,184.58999633789062,0.0,,,,,,,Active
+2026-08-25,Confluence,KARURVYSYA,Karur Vysya Bank Ltd.,KARURVYSYA.NS,Nifty Total Market,Trend Continuation,75.0,346.0,2026-08-25 13:49:37,2026-08-25 13:49:37,346.0,0.0,,,,,,,Active
+2026-08-25,Confluence,MANAPPURAM,Manappuram Finance Ltd.,MANAPPURAM.NS,Nifty Total Market,Fresh Momentum,75.0,367.45001220703125,2026-08-25 13:49:37,2026-08-25 13:49:37,367.45001220703125,0.0,,,,,,,Active
+2026-08-25,Confluence,LGEINDIA,LG Electronics India Ltd.,LGEINDIA.NS,Nifty Total Market,Trend Continuation,75.0,1690.4000244140625,2026-08-25 13:49:37,2026-08-25 13:49:37,1690.4000244140625,0.0,,,,,,,Active
+2026-08-25,Confluence,NMDC,NMDC Ltd.,NMDC.NS,Nifty Total Market,Fresh Momentum,75.0,85.94000244140625,2026-08-25 13:49:37,2026-08-25 13:49:37,85.94000244140625,0.0,,,,,,,Active
+2026-08-25,Final Buy List,PAYTM,One 97 Communications Ltd.,PAYTM.NS,Nifty Total Market,Volume Breakout,93.0,1718.0,2026-08-25 13:49:37,2026-08-25 13:49:37,1718.0,0.0,,,,,,,Active
+2026-08-25,Final Buy List,PARADEEP,Paradeep Phosphates Ltd.,PARADEEP.NS,Nifty Total Market,Volume Breakout,92.4,159.6300048828125,2026-08-25 13:49:37,2026-08-25 13:49:37,159.6300048828125,0.0,,,,,,,Active
+2026-08-25,Final Buy List,BALAMINES,Balaji Amines Ltd.,BALAMINES.NS,Nifty Total Market,Fresh Momentum,85.9,2343.60009765625,2026-08-25 13:49:37,2026-08-25 13:49:37,2343.60009765625,0.0,,,,,,,Active
+2026-08-25,Final Buy List,LAURUSLABS,Laurus Labs Ltd.,LAURUSLABS.NS,Nifty Total Market,Trend Continuation,85.8,1866.199951171875,2026-08-25 13:49:37,2026-08-25 13:49:37,1866.199951171875,0.0,,,,,,,Active
+2026-08-25,Final Buy List,PVRINOX,PVR INOX Ltd.,PVRINOX.NS,Nifty Total Market,Trend Continuation,85.0,1231.0,2026-08-25 13:49:37,2026-08-25 13:49:37,1231.0,0.0,,,,,,,Active
+2026-08-25,Final Buy List,SHRIPISTON,SPR Auto Technologies Ltd.,SHRIPISTON.NS,Nifty Total Market,Trend Continuation,84.2,4629.89990234375,2026-08-25 13:49:37,2026-08-25 13:49:37,4629.89990234375,0.0,,,,,,,Active
+2026-08-25,Final Buy List,LOTUSDEV,SRI LOTUS DEVELOPERS AND REALTY Ltd.,LOTUSDEV.NS,Nifty Total Market,Fresh Momentum,83.4,181.55999755859375,2026-08-25 13:49:37,2026-08-25 13:49:37,181.55999755859375,0.0,,,,,,,Active
