@@ -247,16 +247,40 @@ def fetch_histories_batch(symbols: list[str], start: pd.Timestamp, end: pd.Times
             progress_callback(idx, len(chunks), f"Downloading batch {idx}/{len(chunks)}")
         time.sleep(0.15)
 
-    # Retry only missing symbols individually. This is a fallback, not the normal path.
+    # Retry only a bounded number of missing symbols individually.
+    # The batch path is the normal path. A Yahoo outage should not turn one update
+    # into an unbounded series of one-by-one network calls.
+    MAX_INDIVIDUAL_RETRIES = 15
     missing = [s for s in symbols if s not in histories]
-    for idx, symbol in enumerate(missing, start=1):
+    retry_symbols = missing[:MAX_INDIVIDUAL_RETRIES]
+
+    for idx, symbol in enumerate(retry_symbols, start=1):
         try:
-            data = yf.download(symbol, start=start.date().isoformat(), end=(end + pd.Timedelta(days=1)).date().isoformat(), auto_adjust=True, progress=False, threads=False)
+            data = yf.download(
+                symbol,
+                start=start.date().isoformat(),
+                end=(end + pd.Timedelta(days=1)).date().isoformat(),
+                auto_adjust=True,
+                progress=False,
+                threads=False,
+            )
             histories.update(_extract_batch_close(data, [symbol]))
         except Exception:
             pass
-        if progress_callback and missing:
-            progress_callback(idx, len(missing), f"Retrying unavailable symbols {idx}/{len(missing)}")
+        if progress_callback and retry_symbols:
+            progress_callback(
+                idx,
+                len(retry_symbols),
+                f"Retrying unavailable symbols {idx}/{len(retry_symbols)}",
+            )
+
+    if progress_callback and len(missing) > MAX_INDIVIDUAL_RETRIES:
+        progress_callback(
+            len(retry_symbols),
+            len(retry_symbols),
+            f"Skipped {len(missing) - MAX_INDIVIDUAL_RETRIES} additional individual retries",
+        )
+
     return histories
 
 
@@ -389,26 +413,86 @@ def append_cohort(database: pd.DataFrame, incoming: pd.DataFrame, histories: dic
 
 
 def update_database(database: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
+    """Refresh only cohorts whose return windows can still change.
+
+    Completed 1-year cohorts are frozen. Active rows share one batch price download
+    per unique Yahoo symbol, and the fetched series is reused across repeated signals.
+    """
     result = normalize_database(database)
     if result.empty:
         return result
-    symbols = result["YahooSymbol"].dropna().astype(str).unique().tolist()
-    min_date = pd.to_datetime(result["CohortDate"], errors="coerce").min()
+
+    today = pd.Timestamp.today().normalize()
+    cohort_dates = pd.to_datetime(result["CohortDate"], errors="coerce").dt.normalize()
+    active_mask = cohort_dates.notna() & (
+        cohort_dates + pd.DateOffset(years=1) > today
+    )
+
+    active_indices = result.index[active_mask]
+    if len(active_indices) == 0:
+        if progress_callback:
+            progress_callback(1, 1, "All cohorts are historical. No refresh needed.")
+        return result
+
+    active_rows = result.loc[active_indices].copy()
+    symbols = (
+        active_rows["YahooSymbol"]
+        .dropna()
+        .astype(str)
+        .loc[lambda s: s.str.strip().ne("") & s.str.lower().ne("nan")]
+        .unique()
+        .tolist()
+    )
+
+    if not symbols:
+        if progress_callback:
+            progress_callback(1, 1, "No valid active Yahoo symbols to refresh.")
+        return result
+
+    min_date = pd.to_datetime(
+        active_rows["CohortDate"], errors="coerce"
+    ).min()
+
     if pd.isna(min_date):
         return result
-    start = pd.Timestamp(min_date) - pd.Timedelta(days=14)
-    end = pd.Timestamp.today().normalize()
-    histories = fetch_histories_batch(symbols, start, end, progress_callback)
+
+    start = pd.Timestamp(min_date).normalize() - pd.Timedelta(days=14)
+    histories = fetch_histories_batch(
+        symbols,
+        start,
+        today,
+        progress_callback,
+    )
+
     now = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-    total = len(result)
-    for pos, idx in enumerate(result.index, start=1):
-        row = result.loc[idx]
-        metrics = metrics_from_history(histories.get(str(row["YahooSymbol"]), pd.Series(dtype=float)), row["CohortDate"])
-        for key, value in metrics.items():
-            result.at[idx, key] = value
-        result.at[idx, "LastUpdated"] = now
+    metric_records = []
+
+    # Build updates first, then assign them in one batch instead of repeated .at writes.
+    for pos, (idx, row) in enumerate(active_rows.iterrows(), start=1):
+        series = histories.get(
+            str(row["YahooSymbol"]),
+            pd.Series(dtype=float),
+        )
+        metrics = metrics_from_history(series, row["CohortDate"])
+        metrics["LastUpdated"] = now
+        metrics["_index"] = idx
+        metric_records.append(metrics)
+
         if progress_callback:
-            progress_callback(pos, total, f"Applying prices {pos}/{total}")
+            progress_callback(
+                pos,
+                len(active_rows),
+                f"Applying prices {pos}/{len(active_rows)}",
+            )
+
+    if metric_records:
+        updates = pd.DataFrame(metric_records).set_index("_index")
+        update_columns = [
+            col for col in updates.columns
+            if col in result.columns
+        ]
+        result.loc[updates.index, update_columns] = updates[update_columns]
+
     return normalize_database(result)
 
 
