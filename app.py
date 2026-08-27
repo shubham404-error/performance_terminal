@@ -603,6 +603,25 @@ def build_whatsapp_update(detail: pd.DataFrame, cohort_date, signal_type: str) -
             lines.append(f"{icon} *{symbol}*{setup_text}: {ret:+.2f}%")
         else:
             lines.append(f"⏳ *{symbol}*: Pending")
+    # Keep the WhatsApp update compact: show only the best and worst tracked performers.
+    # The full signal-level detail remains available in Raw Signal Performance.
+    valid_rows = work.loc[work["_ret"].notna()].copy()
+
+    if not valid_rows.empty:
+        best = valid_rows.iloc[0]
+        worst = valid_rows.iloc[-1]
+
+        lines.extend([
+            "",
+            "*Best Performer*",
+            f"🟢 *{best['Symbol']}*: {best['_ret']:+.2f}%",
+            "",
+            "*Worst Performer*",
+            f"🔴 *{worst['Symbol']}*: {worst['_ret']:+.2f}%" if worst["_ret"] < 0 else f"⚪ *{worst['Symbol']}*: {worst['_ret']:+.2f}%",
+        ])
+    else:
+        lines.extend(["", "⏳ Individual performance: Pending"])
+
     lines.extend(["", "_Research tracking only. Not investment advice._"])
     return "\n".join(lines)
 
@@ -623,6 +642,10 @@ if "database" not in st.session_state:
 # -----------------------------------------------------------------------------
 # UI
 # -----------------------------------------------------------------------------
+# Bump this whenever performance is refreshed so the WhatsApp text area gets a
+# fresh Streamlit widget identity instead of retaining stale text.
+st.session_state.setdefault("performance_update_version", 0)
+
 st.title("Performance Terminal")
 st.caption("Private cohort tracking with one persistent GitHub-backed master CSV.")
 
@@ -739,6 +762,12 @@ with tab_dashboard:
                 progress.progress(min(done / max(total, 1), 1.0), text=text)
             updated = update_database(db, callback)
             st.session_state["database"] = updated
+
+            # Streamlit preserves widget state across reruns. Incrementing this
+            # version gives the WhatsApp text area a new key, so it reflects the
+            # freshly calculated performance instead of an older Pending message.
+            st.session_state["performance_update_version"] += 1
+
             ok, err = persist_database(updated, "Daily performance refresh")
             progress.empty()
             if ok:
@@ -801,7 +830,13 @@ with tab_whatsapp:
         row = options.iloc[labels.index(selected)]
         detail = db[(db["CohortDate"] == row["CohortDate"]) & (db["SignalType"] == row["SignalType"])].copy()
         message = build_whatsapp_update(detail, row["CohortDate"], row["SignalType"])
-        st.text_area("Copy and paste into WhatsApp", value=message, height=min(max(320, 32 * (len(message.splitlines()) + 2)), 800))
+        whatsapp_key = f"whatsapp_message_{st.session_state['performance_update_version']}"
+        st.text_area(
+            "Copy and paste into WhatsApp",
+            value=message,
+            key=whatsapp_key,
+            height=min(max(320, 32 * (len(message.splitlines()) + 2)), 800),
+        )
 
 with tab_export:
     db = normalize_database(st.session_state["database"])
