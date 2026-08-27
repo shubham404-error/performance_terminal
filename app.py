@@ -351,6 +351,7 @@ def target_date(cohort_date, horizon: str) -> pd.Timestamp:
 
 
 def metrics_from_history(series: pd.Series, cohort_date) -> dict:
+    """Calculate performance strictly from the dates actually present in Yahoo data."""
     result = {
         "EntryPrice": np.nan,
         "CurrentPrice": np.nan,
@@ -363,29 +364,57 @@ def metrics_from_history(series: pd.Series, cohort_date) -> dict:
         "Return1Y": np.nan,
         "Status": "Price history unavailable",
     }
+
     if series is None or series.empty:
         return result
+
+    series = pd.to_numeric(series, errors="coerce").dropna().sort_index()
+    if series.empty:
+        return result
+
+    series.index = pd.to_datetime(series.index, errors="coerce")
+    series = series.loc[~series.index.isna()]
+    if series.empty:
+        return result
+
     cohort_ts = pd.Timestamp(cohort_date).normalize()
     entry = close_on_or_before(series, cohort_ts)
     if pd.isna(entry):
         return result
+
+    # The downloaded history itself is the source of truth. Do not gate usable
+    # prices on the Streamlit server's calendar date.
+    latest_available_date = pd.Timestamp(series.index.max()).normalize()
+    current = float(series.iloc[-1])
+
     result["EntryPrice"] = entry
-    latest = series.loc[series.index <= pd.Timestamp.today().normalize()]
-    if not latest.empty:
-        current = float(latest.iloc[-1])
-        result["CurrentPrice"] = current
-        result["TrailingProfitPct"] = pct(current, entry)
+    result["CurrentPrice"] = current
+    result["TrailingProfitPct"] = pct(current, entry)
+
     horizon_map = {
-        "Return1D": "1D", "Return1W": "1W", "Return1M": "1M",
-        "Return3M": "3M", "Return6M": "6M", "Return1Y": "1Y",
+        "Return1D": "1D",
+        "Return1W": "1W",
+        "Return1M": "1M",
+        "Return3M": "3M",
+        "Return6M": "6M",
+        "Return1Y": "1Y",
     }
-    today = pd.Timestamp.today().normalize()
+
     for col, horizon in horizon_map.items():
         target = target_date(cohort_ts, horizon)
-        if target <= today:
+
+        # Only calculate a checkpoint once the downloaded series has reached
+        # that calendar date. This uses the next available trading close when
+        # the exact target is a weekend or market holiday.
+        if target <= latest_available_date:
             checkpoint = close_on_or_before_calendar(series, target)
             result[col] = pct(checkpoint, entry)
-    result["Status"] = "Historical" if target_date(cohort_ts, "1Y") <= today else "Active"
+
+    result["Status"] = (
+        "Historical"
+        if target_date(cohort_ts, "1Y") <= latest_available_date
+        else "Active"
+    )
     return result
 
 
@@ -497,11 +526,14 @@ def update_database(database: pd.DataFrame, progress_callback=None):
         return result, diagnostics
 
     start = pd.Timestamp(min_date).normalize() - pd.Timedelta(days=14)
-    histories = fetch_histories_batch(symbols, start, today, progress_callback)
+    expected_date = diagnostics["expected_market_date"]
+
+    # Fetch through the latest completed NSE session. fetch_histories_batch()
+    # adds one day because Yahoo's end date is exclusive.
+    histories = fetch_histories_batch(symbols, start, expected_date, progress_callback)
 
     usable_histories = {}
     latest_dates = []
-    expected_date = diagnostics["expected_market_date"]
 
     for symbol in symbols:
         series = histories.get(symbol, pd.Series(dtype=float))
@@ -538,6 +570,8 @@ def update_database(database: pd.DataFrame, progress_callback=None):
             continue
 
         metrics = metrics_from_history(usable_histories[symbol], row["CohortDate"])
+
+        # Record the actual latest Yahoo close used for this row.
         metrics["LastUpdated"] = now
         metrics["_index"] = idx
         metric_records.append(metrics)
