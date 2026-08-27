@@ -4,6 +4,7 @@ import base64
 import io
 import time
 from datetime import date
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -186,6 +187,42 @@ def persist_database(database: pd.DataFrame, message: str):
     if ok:
         st.session_state["github_sha"] = new_sha
     return ok, err
+
+
+# -----------------------------------------------------------------------------
+# Market-date and data-freshness helpers
+# -----------------------------------------------------------------------------
+IST = ZoneInfo("Asia/Kolkata")
+
+
+def india_today() -> pd.Timestamp:
+    return pd.Timestamp.now(tz=IST).tz_localize(None).normalize()
+
+
+def latest_completed_nse_date() -> pd.Timestamp:
+    """Latest completed weekday for daily-close performance tracking."""
+    now_ist = pd.Timestamp.now(tz=IST)
+    current = now_ist.tz_localize(None).normalize()
+
+    # Yahoo daily data should not be treated as today's completed close before
+    # the NSE session has ended and the daily bar has had time to settle.
+    if now_ist.hour < 16:
+        current -= pd.Timedelta(days=1)
+
+    while current.weekday() >= 5:
+        current -= pd.Timedelta(days=1)
+
+    return current
+
+
+def history_latest_date(series: pd.Series):
+    if series is None or series.empty:
+        return None
+    index = pd.to_datetime(series.index, errors="coerce")
+    index = index[~pd.isna(index)]
+    if len(index) == 0:
+        return None
+    return pd.Timestamp(index.max()).normalize()
 
 
 # -----------------------------------------------------------------------------
@@ -412,27 +449,32 @@ def append_cohort(database: pd.DataFrame, incoming: pd.DataFrame, histories: dic
     return result, len(add_df)
 
 
-def update_database(database: pd.DataFrame, progress_callback=None) -> pd.DataFrame:
-    """Refresh only cohorts whose return windows can still change.
-
-    Completed 1-year cohorts are frozen. Active rows share one batch price download
-    per unique Yahoo symbol, and the fetched series is reused across repeated signals.
-    """
+def update_database(database: pd.DataFrame, progress_callback=None):
+    """Refresh active cohorts and return updated data plus freshness diagnostics."""
     result = normalize_database(database)
-    if result.empty:
-        return result
+    diagnostics = {
+        "requested_symbols": 0,
+        "usable_symbols": 0,
+        "missing_symbols": [],
+        "latest_data_date": None,
+        "expected_market_date": latest_completed_nse_date(),
+        "stale_symbols": [],
+    }
 
-    today = pd.Timestamp.today().normalize()
+    if result.empty:
+        return result, diagnostics
+
+    today = india_today()
     cohort_dates = pd.to_datetime(result["CohortDate"], errors="coerce").dt.normalize()
     active_mask = cohort_dates.notna() & (
         cohort_dates + pd.DateOffset(years=1) > today
     )
-
     active_indices = result.index[active_mask]
+
     if len(active_indices) == 0:
         if progress_callback:
             progress_callback(1, 1, "All cohorts are historical. No refresh needed.")
-        return result
+        return result, diagnostics
 
     active_rows = result.loc[active_indices].copy()
     symbols = (
@@ -443,37 +485,59 @@ def update_database(database: pd.DataFrame, progress_callback=None) -> pd.DataFr
         .unique()
         .tolist()
     )
+    diagnostics["requested_symbols"] = len(symbols)
 
     if not symbols:
         if progress_callback:
             progress_callback(1, 1, "No valid active Yahoo symbols to refresh.")
-        return result
+        return result, diagnostics
 
-    min_date = pd.to_datetime(
-        active_rows["CohortDate"], errors="coerce"
-    ).min()
-
+    min_date = pd.to_datetime(active_rows["CohortDate"], errors="coerce").min()
     if pd.isna(min_date):
-        return result
+        return result, diagnostics
 
     start = pd.Timestamp(min_date).normalize() - pd.Timedelta(days=14)
-    histories = fetch_histories_batch(
-        symbols,
-        start,
-        today,
-        progress_callback,
-    )
+    histories = fetch_histories_batch(symbols, start, today, progress_callback)
 
-    now = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+    usable_histories = {}
+    latest_dates = []
+    expected_date = diagnostics["expected_market_date"]
+
+    for symbol in symbols:
+        series = histories.get(symbol, pd.Series(dtype=float))
+        latest_date = history_latest_date(series)
+
+        if latest_date is None:
+            diagnostics["missing_symbols"].append(symbol)
+            continue
+
+        usable_histories[symbol] = series
+        latest_dates.append(latest_date)
+
+        if latest_date < expected_date:
+            diagnostics["stale_symbols"].append(symbol)
+
+    diagnostics["usable_symbols"] = len(usable_histories)
+    if latest_dates:
+        diagnostics["latest_data_date"] = max(latest_dates)
+
+    now = pd.Timestamp.now(tz=IST).strftime("%Y-%m-%d %H:%M:%S IST")
     metric_records = []
 
-    # Build updates first, then assign them in one batch instead of repeated .at writes.
+    # Never overwrite existing performance with empty-history metrics.
     for pos, (idx, row) in enumerate(active_rows.iterrows(), start=1):
-        series = histories.get(
-            str(row["YahooSymbol"]),
-            pd.Series(dtype=float),
-        )
-        metrics = metrics_from_history(series, row["CohortDate"])
+        symbol = str(row["YahooSymbol"])
+
+        if symbol not in usable_histories:
+            if progress_callback:
+                progress_callback(
+                    pos,
+                    len(active_rows),
+                    f"Retaining previous values {pos}/{len(active_rows)}",
+                )
+            continue
+
+        metrics = metrics_from_history(usable_histories[symbol], row["CohortDate"])
         metrics["LastUpdated"] = now
         metrics["_index"] = idx
         metric_records.append(metrics)
@@ -487,13 +551,10 @@ def update_database(database: pd.DataFrame, progress_callback=None) -> pd.DataFr
 
     if metric_records:
         updates = pd.DataFrame(metric_records).set_index("_index")
-        update_columns = [
-            col for col in updates.columns
-            if col in result.columns
-        ]
+        update_columns = [col for col in updates.columns if col in result.columns]
         result.loc[updates.index, update_columns] = updates[update_columns]
 
-    return normalize_database(result)
+    return normalize_database(result), diagnostics
 
 
 # -----------------------------------------------------------------------------
@@ -570,11 +631,14 @@ def consolidated_trades(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_whatsapp_update(detail: pd.DataFrame, cohort_date, signal_type: str) -> str:
+    """Build a compact WhatsApp summary with only the best and worst performers."""
     if detail.empty:
         return "No tracked signals available for this cohort."
+
     work = detail.copy()
     work["_ret"] = safe_number(work["TrailingProfitPct"])
     work = work.sort_values("_ret", ascending=False, na_position="last")
+
     tracked = work["_ret"].dropna()
     wins = int((tracked > 0).sum())
     losses = int((tracked < 0).sum())
@@ -582,6 +646,7 @@ def build_whatsapp_update(detail: pd.DataFrame, cohort_date, signal_type: str) -
     avg = tracked.mean() if not tracked.empty else np.nan
     win_rate = wins / len(tracked) * 100 if not tracked.empty else np.nan
     label = pd.to_datetime(cohort_date).strftime("%d %b %Y")
+
     lines = [
         f"📊 *{signal_type} Performance Update*",
         f"📅 Cohort: {label}",
@@ -589,38 +654,26 @@ def build_whatsapp_update(detail: pd.DataFrame, cohort_date, signal_type: str) -
         f"🎯 Signals: {len(work)}",
         f"📈 Trailing Average: {avg:+.2f}%" if pd.notna(avg) else "📈 Trailing Average: Pending",
         f"🟢 Win Rate: {win_rate:.1f}%" if pd.notna(win_rate) else "🟢 Win Rate: Pending",
-        f"🟢 Winners: {wins}  |  🔴 Losers: {losses}  |  ⚪ Neutral: {neutral}",
-        "",
-        "*Running Signals*",
+        f"🟢 Winners: {wins} | 🔴 Losers: {losses} | ⚪ Neutral: {neutral}",
     ]
-    for row in work.itertuples(index=False):
-        symbol = str(getattr(row, "Symbol", "")).strip()
-        ret = getattr(row, "_ret", np.nan)
-        setup = str(getattr(row, "Setup", "")).strip()
-        setup_text = f" | {setup}" if setup and setup.lower() != "nan" else ""
-        if pd.notna(ret):
-            icon = "🟢" if ret > 0 else ("🔴" if ret < 0 else "⚪")
-            lines.append(f"{icon} *{symbol}*{setup_text}: {ret:+.2f}%")
-        else:
-            lines.append(f"⏳ *{symbol}*: Pending")
-    # Keep the WhatsApp update compact: show only the best and worst tracked performers.
-    # The full signal-level detail remains available in Raw Signal Performance.
-    valid_rows = work.loc[work["_ret"].notna()].copy()
 
+    valid_rows = work.loc[work["_ret"].notna()].copy()
     if not valid_rows.empty:
         best = valid_rows.iloc[0]
         worst = valid_rows.iloc[-1]
 
         lines.extend([
             "",
-            "*Best Performer*",
+            "🏆 *Best Performer*",
             f"🟢 *{best['Symbol']}*: {best['_ret']:+.2f}%",
             "",
-            "*Worst Performer*",
-            f"🔴 *{worst['Symbol']}*: {worst['_ret']:+.2f}%" if worst["_ret"] < 0 else f"⚪ *{worst['Symbol']}*: {worst['_ret']:+.2f}%",
+            "📉 *Worst Performer*",
         ])
+
+        worst_icon = "🔴" if worst["_ret"] < 0 else ("⚪" if worst["_ret"] == 0 else "🟢")
+        lines.append(f"{worst_icon} *{worst['Symbol']}*: {worst['_ret']:+.2f}%")
     else:
-        lines.extend(["", "⏳ Individual performance: Pending"])
+        lines.extend(["", "⏳ Performance data: Pending"])
 
     lines.extend(["", "_Research tracking only. Not investment advice._"])
     return "\n".join(lines)
@@ -760,7 +813,7 @@ with tab_dashboard:
             progress = st.progress(0, text="Preparing price update...")
             def callback(done, total, text):
                 progress.progress(min(done / max(total, 1), 1.0), text=text)
-            updated = update_database(db, callback)
+            updated, diagnostics = update_database(db, callback)
             st.session_state["database"] = updated
 
             # Streamlit preserves widget state across reruns. Incrementing this
@@ -770,10 +823,48 @@ with tab_dashboard:
 
             ok, err = persist_database(updated, "Daily performance refresh")
             progress.empty()
-            if ok:
-                st.success("Performance refreshed and master CSV saved.")
+
+            latest = diagnostics.get("latest_data_date")
+            expected = diagnostics.get("expected_market_date")
+            missing = diagnostics.get("missing_symbols", [])
+            stale = diagnostics.get("stale_symbols", [])
+            usable = diagnostics.get("usable_symbols", 0)
+            requested = diagnostics.get("requested_symbols", 0)
+
+            fresh = (
+                latest is not None
+                and latest >= expected
+                and not missing
+                and not stale
+            )
+
+            if fresh:
+                freshness_message = (
+                    f"Performance updated through {latest.strftime('%d %b %Y')}. "
+                    f"{usable}/{requested} symbols refreshed successfully."
+                )
             else:
-                st.error(f"Performance refreshed locally, but GitHub save failed: {err}")
+                latest_label = (
+                    latest.strftime("%d %b %Y")
+                    if latest is not None
+                    else "No usable data"
+                )
+                expected_label = expected.strftime("%d %b %Y")
+                freshness_message = (
+                    f"Performance partially updated. Latest Yahoo closing data available: "
+                    f"{latest_label}. Expected latest completed market date: {expected_label}. "
+                    f"Usable symbols: {usable}/{requested}. "
+                    f"Missing: {len(missing)}. Stale: {len(stale)}. "
+                    f"Previous values were retained for symbols with no usable history."
+                )
+
+            if ok:
+                if fresh:
+                    st.success(f"{freshness_message} Master CSV saved.")
+                else:
+                    st.warning(f"{freshness_message} Master CSV saved.")
+            else:
+                st.error(f"{freshness_message} GitHub save failed: {err}")
 
         summary = cohort_summary(st.session_state["database"])
         st.divider()
