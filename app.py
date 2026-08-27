@@ -230,95 +230,153 @@ def history_latest_date(series: pd.Series):
 # cohort row for that symbol. 100 rows with repeated names do not mean 100 calls.
 # -----------------------------------------------------------------------------
 def _extract_batch_close(data: pd.DataFrame, tickers: list[str]) -> dict[str, pd.Series]:
-    out = {}
+    """Extract one clean Close series per ticker from yfinance output."""
+    out: dict[str, pd.Series] = {}
     if data is None or data.empty:
         return out
+
     try:
         if isinstance(data.columns, pd.MultiIndex):
-            level0 = set(data.columns.get_level_values(0))
-            level1 = set(data.columns.get_level_values(1))
-            if "Close" in level0:
-                closes = data["Close"]
-            elif "Close" in level1:
-                closes = data.xs("Close", axis=1, level=1)
-            else:
-                return out
+            # yfinance has used both (Price, Ticker) and (Ticker, Price)
+            # layouts across versions and options. Detect the Close level rather
+            # than assuming one fixed orientation.
             for ticker in tickers:
-                if ticker in closes.columns:
-                    series = pd.to_numeric(closes[ticker], errors="coerce").dropna()
+                series = None
+                try:
+                    if ("Close", ticker) in data.columns:
+                        series = data[("Close", ticker)]
+                    elif (ticker, "Close") in data.columns:
+                        series = data[(ticker, "Close")]
+                except Exception:
+                    series = None
+
+                if series is not None:
+                    series = pd.to_numeric(series, errors="coerce").dropna()
                     if not series.empty:
-                        series.index = pd.to_datetime(series.index).tz_localize(None)
-                        out[ticker] = series
+                        idx = pd.to_datetime(series.index, errors="coerce")
+                        if getattr(idx, "tz", None) is not None:
+                            idx = idx.tz_localize(None)
+                        series.index = idx
+                        series = series.loc[~series.index.isna()].sort_index()
+                        if not series.empty:
+                            out[ticker] = series
         else:
-            close = pd.to_numeric(data["Close"], errors="coerce").dropna()
-            if not close.empty and len(tickers) == 1:
-                close.index = pd.to_datetime(close.index).tz_localize(None)
-                out[tickers[0]] = close
+            if "Close" in data.columns and len(tickers) == 1:
+                close = pd.to_numeric(data["Close"], errors="coerce").dropna()
+                idx = pd.to_datetime(close.index, errors="coerce")
+                if getattr(idx, "tz", None) is not None:
+                    idx = idx.tz_localize(None)
+                close.index = idx
+                close = close.loc[~close.index.isna()].sort_index()
+                if not close.empty:
+                    out[tickers[0]] = close
     except Exception:
         return out
     return out
 
 
-def fetch_histories_batch(symbols: list[str], start: pd.Timestamp, end: pd.Timestamp, progress_callback=None) -> dict[str, pd.Series]:
-    symbols = sorted({str(x) for x in symbols if str(x).strip() and str(x).lower() != "nan"})
+def _download_single_history(symbol: str, start: pd.Timestamp, end: pd.Timestamp):
+    """Robust single-symbol fallback. Returns (series, error_message)."""
+    errors = []
+    end_exclusive = (pd.Timestamp(end).normalize() + pd.Timedelta(days=2)).date().isoformat()
+    start_text = pd.Timestamp(start).normalize().date().isoformat()
+
+    # First use yf.download because it is fast and consistent with the batch path.
+    try:
+        data = yf.download(
+            symbol,
+            start=start_text,
+            end=end_exclusive,
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+            group_by="column",
+        )
+        extracted = _extract_batch_close(data, [symbol])
+        series = extracted.get(symbol)
+        if series is not None and not series.empty:
+            return series, None
+        errors.append("yf.download returned no usable Close data")
+    except Exception as exc:
+        errors.append(f"yf.download: {type(exc).__name__}: {exc}")
+
+    # Second path avoids the multi-ticker response shape entirely.
+    try:
+        data = yf.Ticker(symbol).history(
+            start=start_text,
+            end=end_exclusive,
+            auto_adjust=True,
+            actions=False,
+        )
+        if data is not None and not data.empty and "Close" in data.columns:
+            close = pd.to_numeric(data["Close"], errors="coerce").dropna()
+            if not close.empty:
+                idx = pd.to_datetime(close.index, errors="coerce")
+                if getattr(idx, "tz", None) is not None:
+                    idx = idx.tz_localize(None)
+                close.index = idx
+                close = close.loc[~close.index.isna()].sort_index()
+                if not close.empty:
+                    return close, None
+        errors.append("Ticker.history returned no usable Close data")
+    except Exception as exc:
+        errors.append(f"Ticker.history: {type(exc).__name__}: {exc}")
+
+    return pd.Series(dtype=float), " | ".join(errors[-2:])
+
+
+def fetch_histories_batch(symbols: list[str], start: pd.Timestamp, end: pd.Timestamp, progress_callback=None, return_diagnostics: bool = False):
+    """Download each unique symbol once, with robust extraction and explicit diagnostics."""
+    symbols = sorted({str(x).strip().upper() for x in symbols if str(x).strip() and str(x).lower() != "nan"})
+    diagnostics = {"batch_errors": [], "symbol_errors": {}, "batch_returned": 0, "fallback_used": []}
     if not symbols:
-        return {}
+        return ({}, diagnostics) if return_diagnostics else {}
+
     histories: dict[str, pd.Series] = {}
-    chunk_size = 40
+    chunk_size = 25
     chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
+    start_text = pd.Timestamp(start).normalize().date().isoformat()
+    end_exclusive = (pd.Timestamp(end).normalize() + pd.Timedelta(days=2)).date().isoformat()
+
     for idx, chunk in enumerate(chunks, start=1):
         try:
             data = yf.download(
                 tickers=chunk,
-                start=start.date().isoformat(),
-                end=(end + pd.Timedelta(days=1)).date().isoformat(),
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-                group_by="column",
-            )
-            histories.update(_extract_batch_close(data, chunk))
-        except Exception:
-            pass
-        if progress_callback:
-            progress_callback(idx, len(chunks), f"Downloading batch {idx}/{len(chunks)}")
-        time.sleep(0.15)
-
-    # Retry only a bounded number of missing symbols individually.
-    # The batch path is the normal path. A Yahoo outage should not turn one update
-    # into an unbounded series of one-by-one network calls.
-    MAX_INDIVIDUAL_RETRIES = 15
-    missing = [s for s in symbols if s not in histories]
-    retry_symbols = missing[:MAX_INDIVIDUAL_RETRIES]
-
-    for idx, symbol in enumerate(retry_symbols, start=1):
-        try:
-            data = yf.download(
-                symbol,
-                start=start.date().isoformat(),
-                end=(end + pd.Timedelta(days=1)).date().isoformat(),
+                start=start_text,
+                end=end_exclusive,
                 auto_adjust=True,
                 progress=False,
                 threads=False,
+                group_by="column",
             )
-            histories.update(_extract_batch_close(data, [symbol]))
-        except Exception:
-            pass
-        if progress_callback and retry_symbols:
-            progress_callback(
-                idx,
-                len(retry_symbols),
-                f"Retrying unavailable symbols {idx}/{len(retry_symbols)}",
-            )
+            extracted = _extract_batch_close(data, chunk)
+            histories.update(extracted)
+        except Exception as exc:
+            diagnostics["batch_errors"].append(f"Batch {idx}: {type(exc).__name__}: {exc}")
 
-    if progress_callback and len(missing) > MAX_INDIVIDUAL_RETRIES:
-        progress_callback(
-            len(retry_symbols),
-            len(retry_symbols),
-            f"Skipped {len(missing) - MAX_INDIVIDUAL_RETRIES} additional individual retries",
-        )
+        if progress_callback:
+            progress_callback(idx, len(chunks), f"Downloading batch {idx}/{len(chunks)}. Usable symbols: {len(histories)}")
+        time.sleep(0.2)
 
-    return histories
+    diagnostics["batch_returned"] = len(histories)
+
+    # Retry every missing unique symbol, not every database row. This remains
+    # bounded by the number of unique active symbols and is the safety net for
+    # partial Yahoo batch responses.
+    missing = [s for s in symbols if s not in histories]
+    for idx, symbol in enumerate(missing, start=1):
+        series, error = _download_single_history(symbol, start, end)
+        if not series.empty:
+            histories[symbol] = series
+            diagnostics["fallback_used"].append(symbol)
+        else:
+            diagnostics["symbol_errors"][symbol] = error or "No usable history returned"
+
+        if progress_callback and missing:
+            progress_callback(idx, len(missing), f"Verifying Yahoo history {idx}/{len(missing)}. Usable: {len(histories)}")
+        time.sleep(0.1)
+
+    return (histories, diagnostics) if return_diagnostics else histories
 
 
 def close_on_or_before(series: pd.Series, target) -> float:
@@ -488,6 +546,7 @@ def update_database(database: pd.DataFrame, progress_callback=None):
         "latest_data_date": None,
         "expected_market_date": latest_completed_nse_date(),
         "stale_symbols": [],
+        "fetch_diagnostics": {},
     }
 
     if result.empty:
@@ -530,7 +589,10 @@ def update_database(database: pd.DataFrame, progress_callback=None):
 
     # Fetch through the latest completed NSE session. fetch_histories_batch()
     # adds one day because Yahoo's end date is exclusive.
-    histories = fetch_histories_batch(symbols, start, expected_date, progress_callback)
+    histories, fetch_diagnostics = fetch_histories_batch(
+        symbols, start, expected_date, progress_callback, return_diagnostics=True
+    )
+    diagnostics["fetch_diagnostics"] = fetch_diagnostics
 
     usable_histories = {}
     latest_dates = []
@@ -899,6 +961,23 @@ with tab_dashboard:
                     st.warning(f"{freshness_message} Master CSV saved.")
             else:
                 st.error(f"{freshness_message} GitHub save failed: {err}")
+
+            fetch_diag = diagnostics.get("fetch_diagnostics", {})
+            fallback_count = len(fetch_diag.get("fallback_used", []))
+            if fallback_count:
+                st.caption(f"Yahoo batch fallback recovered {fallback_count} symbol(s) individually.")
+            symbol_errors = fetch_diag.get("symbol_errors", {})
+            batch_errors = fetch_diag.get("batch_errors", [])
+            if symbol_errors or batch_errors:
+                with st.expander("Yahoo download diagnostics"):
+                    if batch_errors:
+                        st.write("Batch errors:")
+                        for item in batch_errors:
+                            st.code(item)
+                    if symbol_errors:
+                        st.write("Symbols with no usable history:")
+                        for symbol, message in symbol_errors.items():
+                            st.code(f"{symbol}: {message}")
 
         summary = cohort_summary(st.session_state["database"])
         st.divider()
